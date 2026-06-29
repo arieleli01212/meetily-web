@@ -3,7 +3,15 @@ from functools import lru_cache
 
 import json
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+import httpx
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
@@ -24,6 +32,7 @@ from app.models import (
     TranscriptRequest,
 )
 from app.summarizer import run_summary
+from app.transcribe import transcribe_audio
 
 app = FastAPI(title="Meetily Web Backend")
 
@@ -58,6 +67,16 @@ def get_provider(db: Database = Depends(get_db)):
     return build_provider(
         provider=provider, base_url=s.llm_base_url, model=model, api_key=api_key
     )
+
+
+@lru_cache
+def _whisper_client() -> httpx.Client:
+    return httpx.Client()
+
+
+def get_whisper_client() -> httpx.Client:
+    """HTTP client used to reach the whisper server; overridable in tests."""
+    return _whisper_client()
 
 
 # ---------------------------------------------------------------------- meetings
@@ -232,6 +251,25 @@ def save_meeting_summary(req: MeetingSummaryUpdate, db: Database = Depends(get_d
     db.update_process(req.meeting_id, status="completed",
                       result=json.dumps(req.summary))
     return {"status": "success", "message": "Summary saved"}
+
+
+# ---------------------------------------------------------------- transcription
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...),
+                     client: httpx.Client = Depends(get_whisper_client)):
+    audio = await file.read()
+    whisper_url = get_settings().whisper_server_url
+    try:
+        text = transcribe_audio(
+            audio, file.filename or "audio.wav",
+            file.content_type or "audio/wav", whisper_url, client,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Whisper server unreachable at {whisper_url}: {exc}",
+        )
+    return {"text": text}
 
 
 @app.get("/health")

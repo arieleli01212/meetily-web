@@ -1,23 +1,29 @@
 """FastAPI application — a faithful web clone of the meetily backend API."""
 from functools import lru_cache
 
-from fastapi import Depends, FastAPI, HTTPException
+import json
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import Database, new_id
+from app.llm import build_provider
 from app.models import (
     DeleteMeetingRequest,
     GetApiKeyRequest,
     MeetingDetailsResponse,
     MeetingResponse,
+    MeetingSummaryUpdate,
     MeetingTitleUpdate,
     SaveModelConfigRequest,
     SaveTranscriptConfigRequest,
     SaveTranscriptRequest,
     SearchRequest,
     Transcript,
+    TranscriptRequest,
 )
+from app.summarizer import run_summary
 
 app = FastAPI(title="Meetily Web Backend")
 
@@ -39,6 +45,19 @@ def _default_db() -> Database:
 def get_db() -> Database:
     """Dependency returning the database; overridable in tests."""
     return _default_db()
+
+
+def get_provider(db: Database = Depends(get_db)):
+    """Build the configured LLM provider, preferring saved runtime settings
+    over env defaults. Overridable in tests."""
+    s = get_settings()
+    cfg = db.get_model_config()
+    provider = (cfg or {}).get("provider", s.llm_provider)
+    model = (cfg or {}).get("model", s.llm_model)
+    api_key = db.get_api_key(provider) or s.llm_api_key
+    return build_provider(
+        provider=provider, base_url=s.llm_base_url, model=model, api_key=api_key
+    )
 
 
 # ---------------------------------------------------------------------- meetings
@@ -171,6 +190,48 @@ def get_config():
         "chunk_size": s.chunk_size,
         "chunk_overlap": s.chunk_overlap,
     }
+
+
+# ------------------------------------------------------------------- summaries
+@app.post("/process-transcript")
+def process_transcript(req: TranscriptRequest, background: BackgroundTasks,
+                       db: Database = Depends(get_db),
+                       provider=Depends(get_provider)):
+    if not db.get_meeting(req.meeting_id):
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    s = get_settings()
+    text = req.text or db.get_full_transcript_text(req.meeting_id)
+    chunk_size = req.chunk_size or s.chunk_size
+    overlap = req.overlap if req.overlap is not None else s.chunk_overlap
+    db.save_transcript_chunk(
+        meeting_id=req.meeting_id, transcript_text=text, model=req.model,
+        model_name=req.model_name, chunk_size=chunk_size, overlap=overlap,
+    )
+    background.add_task(run_summary, req.meeting_id, text, provider, db,
+                        chunk_size, overlap, req.custom_prompt)
+    return {"status": "processing", "process_id": req.meeting_id}
+
+
+@app.get("/get-summary/{meeting_id}")
+def get_summary(meeting_id: str, db: Database = Depends(get_db)):
+    proc = db.get_process(meeting_id)
+    if not proc:
+        raise HTTPException(status_code=404, detail="No summary process found")
+    result = proc.get("result")
+    return {
+        "meeting_id": meeting_id,
+        "status": proc["status"],
+        "error": proc.get("error"),
+        "result": json.loads(result) if result else None,
+    }
+
+
+@app.post("/save-meeting-summary")
+def save_meeting_summary(req: MeetingSummaryUpdate, db: Database = Depends(get_db)):
+    db.create_process(req.meeting_id)
+    db.update_process(req.meeting_id, status="completed",
+                      result=json.dumps(req.summary))
+    return {"status": "success", "message": "Summary saved"}
 
 
 @app.get("/health")

@@ -1,0 +1,42 @@
+# Meetily Web — air-gapped deployment.
+#
+# Only the frontend and backend run here. The whisper.cpp server and the LLM
+# (e.g. Ollama) are EXTERNAL services reached by URL, so point the env vars at
+# wherever they live on your network. Copy .env.example to .env and edit.
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "${BACKEND_PORT:-5167}:5167"
+    environment:
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: 5167
+      DB_PATH: /data/meetily.db
+      # External services — configure for your environment:
+      WHISPER_SERVER_URL: ${WHISPER_SERVER_URL:-http://host.docker.internal:8178}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
+      LLM_MODEL: ${LLM_MODEL:-llama3.2}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      CHUNK_SIZE: ${CHUNK_SIZE:-5000}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-1000}
+    volumes:
+      - meetily-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The browser talks to the backend at this URL — set to the address
+        # reachable from users' browsers (not the docker-internal name).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5167}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+
+volumes:
+  meetily-data:

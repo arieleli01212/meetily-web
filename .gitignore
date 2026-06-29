@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.db
+*.sqlite3
+# Node
+node_modules/
+.next/
+out/
+dist/
+# Env
+.env
+.env.local
+# OS
+.DS_Store
+# Scratch
+*.log

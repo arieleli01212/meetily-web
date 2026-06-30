@@ -1,0 +1,6 @@
+# WhisperX brings in faster-whisper, pyannote.audio, torch, and torchaudio.
+# Pin whisperx; let it resolve its ML deps for your platform.
+whisperx==3.1.5
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20

@@ -10,6 +10,8 @@ export default function RecordPage() {
   const [recording, setRecording] = useState(false);
   const [title, setTitle] = useState("Untitled meeting");
   const [systemAudio, setSystemAudio] = useState(false);
+  const [identifySpeakers, setIdentifySpeakers] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
@@ -19,6 +21,7 @@ export default function RecordPage() {
     setLines([]);
     const rec = new Recorder({
       captureSystemAudio: systemAudio,
+      keepFullAudio: identifySpeakers,
       onTranscript: (t) => setLines((prev) => [...prev, t]),
       onError: (e) => setError(e),
     });
@@ -32,7 +35,8 @@ export default function RecordPage() {
   }
 
   async function stopAndSave() {
-    await recorderRef.current?.stop();
+    const rec = recorderRef.current;
+    await rec?.stop();
     setRecording(false);
     const now = new Date().toISOString();
     const transcripts: TranscriptLine[] = lines.map((text, i) => ({
@@ -41,13 +45,25 @@ export default function RecordPage() {
       timestamp: now,
     }));
     try {
+      setStatus("Saving meeting…");
       const { meeting_id } = await api.saveTranscript({
         meeting_title: title,
         transcripts,
       });
+
+      // Post-meeting diarization on the full recording (replaces transcript
+      // with speaker-labeled segments).
+      if (identifySpeakers) {
+        const wav = rec?.getFullWav();
+        if (wav) {
+          setStatus("Identifying speakers… (this can take a while)");
+          await api.transcribeDiarized(wav, { meeting_id });
+        }
+      }
       router.push(`/meeting/${meeting_id}`);
     } catch (e) {
-      setError(`Failed to save meeting: ${e}`);
+      setError(`Failed: ${e}`);
+      setStatus(null);
     }
   }
 
@@ -72,6 +88,19 @@ export default function RecordPage() {
           </span>
         </label>
 
+        <label className="row">
+          <input
+            type="checkbox"
+            checked={identifySpeakers}
+            disabled={recording}
+            onChange={(e) => setIdentifySpeakers(e.target.checked)}
+            style={{ width: "auto" }}
+          />
+          <span style={{ marginLeft: 8 }}>
+            Identify speakers (diarize full recording after stop)
+          </span>
+        </label>
+
         <div className="row" style={{ marginTop: 14 }}>
           {!recording ? (
             <button className="btn" onClick={start}>
@@ -84,6 +113,11 @@ export default function RecordPage() {
           )}
           {recording && <span className="pill ok">recording…</span>}
         </div>
+        {status && (
+          <p className="muted" style={{ marginTop: 10 }}>
+            {status}
+          </p>
+        )}
       </div>
 
       {error && <div className="card pill err">{error}</div>}

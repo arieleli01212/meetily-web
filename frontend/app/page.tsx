@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api, Meeting } from "@/lib/api";
 
 export default function MeetingsPage() {
+  const router = useRouter();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<
@@ -12,6 +14,8 @@ export default function MeetingsPage() {
   >([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   async function load() {
     try {
@@ -43,13 +47,46 @@ export default function MeetingsPage() {
     load();
   }
 
+  async function onImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setError(null);
+    try {
+      const { meeting_id } = await api.transcribeDiarized(file, {
+        meeting_title: file.name,
+      });
+      router.push(`/meeting/${meeting_id}`);
+    } catch (err) {
+      setError(`Import failed: ${err}`);
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div>
       <div className="row spread">
         <h1>Meetings</h1>
-        <Link href="/record" className="btn">
-          + New recording
-        </Link>
+        <div className="row">
+          <button
+            className="btn secondary"
+            disabled={importing}
+            onClick={() => fileRef.current?.click()}
+          >
+            {importing ? "Importing…" : "Import audio (diarize)"}
+          </button>
+          <Link href="/record" className="btn">
+            + New recording
+          </Link>
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="audio/*"
+          style={{ display: "none" }}
+          onChange={onImport}
+        />
       </div>
 
       <form className="row" onSubmit={onSearch} style={{ margin: "12px 0" }}>

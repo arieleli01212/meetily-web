@@ -61,7 +61,11 @@ export default function MeetingPage() {
 
   function onExport() {
     if (!meeting) return;
-    const lines = meeting.transcripts.map((t) => t.text).join("\n");
+    const lines = meeting.transcripts
+      .map((t) =>
+        t.speaker ? `${t.speaker.replace("SPEAKER_", "Speaker ")}: ${t.text}` : t.text,
+      )
+      .join("\n");
     const s = summary?.result;
     let md = `# ${meeting.title}\n\n## Transcript\n\n${lines}\n`;
     if (s) {
@@ -149,6 +153,11 @@ export default function MeetingPage() {
         )}
         {meeting.transcripts.map((t) => (
           <div className="transcript-line" key={t.id}>
+            {t.speaker && (
+              <span className="pill" style={{ marginRight: 8 }}>
+                {t.speaker.replace("SPEAKER_", "Speaker ")}
+              </span>
+            )}
             {t.text}
           </div>
         ))}

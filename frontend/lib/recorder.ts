@@ -51,6 +51,7 @@ function encodeWav(samples: Float32Array): Blob {
 
 export interface RecorderOptions {
   captureSystemAudio?: boolean;
+  keepFullAudio?: boolean;
   intervalMs?: number;
   onTranscript: (text: string) => void;
   onError?: (err: string) => void;
@@ -61,6 +62,8 @@ export class Recorder {
   private processor?: ScriptProcessorNode;
   private streams: MediaStream[] = [];
   private buffer: Float32Array[] = [];
+  // Retains the entire session so the full recording can be diarized post-meeting.
+  private fullBuffer: Float32Array[] = [];
   private timer?: ReturnType<typeof setInterval>;
   private opts: RecorderOptions;
 
@@ -99,7 +102,9 @@ export class Recorder {
     const inputRate = this.ctx.sampleRate;
     this.processor.onaudioprocess = (e) => {
       const data = e.inputBuffer.getChannelData(0);
-      this.buffer.push(downsampleTo16k(new Float32Array(data), inputRate));
+      const chunk = downsampleTo16k(new Float32Array(data), inputRate);
+      this.buffer.push(chunk);
+      if (this.opts.keepFullAudio) this.fullBuffer.push(chunk);
     };
 
     this.timer = setInterval(() => this.flush(), this.opts.intervalMs ?? 6000);
@@ -129,6 +134,19 @@ export class Recorder {
     } catch (e) {
       this.opts.onError?.(`Transcription failed: ${e}`);
     }
+  }
+
+  // Encode the entire retained session as one 16 kHz mono WAV for diarization.
+  getFullWav(): Blob | null {
+    if (this.fullBuffer.length === 0) return null;
+    const total = this.fullBuffer.reduce((n, b) => n + b.length, 0);
+    const merged = new Float32Array(total);
+    let off = 0;
+    for (const b of this.fullBuffer) {
+      merged.set(b, off);
+      off += b.length;
+    }
+    return encodeWav(merged);
   }
 
   async stop() {

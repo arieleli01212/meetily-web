@@ -29,6 +29,7 @@ export interface TranscriptLine {
   audio_start_time?: number | null;
   audio_end_time?: number | null;
   duration?: number | null;
+  speaker?: string | null;
 }
 
 export interface MeetingDetails {
@@ -57,6 +58,7 @@ export interface RuntimeConfig {
   backend_port: number;
   whisper_server_url: string;
   whisper_language: string;
+  diarize_server_url: string;
   llm_provider: string;
   llm_base_url: string;
   llm_model: string;
@@ -114,4 +116,25 @@ export const api = {
   getConfig: () => req<RuntimeConfig>("/get-config"),
   health: () => req<{ status: string }>("/health"),
   transcribeUrl: () => `${API_BASE}/transcribe`,
+  // Post-meeting diarized transcription of a full recording. Returns the
+  // meeting id and speaker-labeled segments.
+  transcribeDiarized: async (
+    audio: Blob,
+    opts: { meeting_id?: string; meeting_title?: string },
+  ) => {
+    const form = new FormData();
+    form.append("file", audio, "meeting.wav");
+    if (opts.meeting_id) form.append("meeting_id", opts.meeting_id);
+    if (opts.meeting_title) form.append("meeting_title", opts.meeting_title);
+    const res = await fetch(`${API_BASE}/transcribe-diarized`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+    return res.json() as Promise<{
+      meeting_id: string;
+      language: string;
+      segments: Array<{ start: number; end: number; text: string; speaker: string }>;
+    }>;
+  },
 };

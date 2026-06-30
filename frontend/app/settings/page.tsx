@@ -80,6 +80,10 @@ export default function SettingsPage() {
               </span>
             </div>
             <div className="row spread">
+              <span>Diarization (WhisperX) URL</span>
+              <span className="muted">{config.diarize_server_url}</span>
+            </div>
+            <div className="row spread">
               <span>LLM base URL</span>
               <span className="muted">{config.llm_base_url}</span>
             </div>

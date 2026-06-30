@@ -9,24 +9,34 @@ connection configurable** so it runs entirely on local/offline infrastructure.
 ## What it does
 
 - Record meetings in the browser (microphone + optional system/tab audio).
-- Transcribe audio via an **external whisper.cpp server** (configurable URL).
+- Transcribe audio via an **external whisper.cpp server** (configurable URL),
+  with selectable language (e.g. **Hebrew**).
+- **Identify speakers** (diarization) post-meeting via an external **WhisperX**
+  service — transcript is labeled Speaker 1 / Speaker 2 / …
 - Store meetings, transcripts, and summaries in **SQLite**.
 - Summarize transcripts via a **configurable LLM** (Ollama / OpenAI-compatible /
   Anthropic), producing structured summary, action items, and key points.
-- Browse, search, rename, delete meetings; export to Markdown.
+- Browse, search, rename, delete meetings; **import audio files** for diarized
+  transcription; export to Markdown.
 
 ## Architecture
 
 ```
 Browser (Next.js)  ──►  FastAPI backend  ──►  whisper.cpp server   (WHISPER_SERVER_URL)
+                              │           ──►  WhisperX service     (DIARIZE_SERVER_URL)
                               │           ──►  LLM provider/Ollama  (LLM_BASE_URL)
                               └──►  SQLite (volume)
 ```
 
-The whisper server and the LLM are **external services reached by URL** — they
-are not bundled, so you point the configuration at whatever runs on your
-network. This is the core of the air-gapped design: no component requires the
-public internet.
+The whisper server, the WhisperX diarization service, and the LLM are all
+**external services reached by URL** — they are not bundled, so you point the
+configuration at whatever runs on your network. This is the core of the
+air-gapped design: no component requires the public internet.
+
+Live transcription uses whisper.cpp on ~6s chunks for instant feedback.
+Speaker identification runs **post-meeting** on the full recording via WhisperX
+(diarization needs the whole audio to keep speaker IDs consistent), then
+replaces the transcript with speaker-labeled segments.
 
 ## API (cloned from meetily)
 
@@ -49,6 +59,8 @@ All connection parameters are environment variables (see `.env.example`):
 | `FRONTEND_PORT` | Frontend port | `3000` |
 | `NEXT_PUBLIC_API_URL` | Backend URL the browser calls | `http://localhost:5167` |
 | `WHISPER_SERVER_URL` | External whisper.cpp server | `http://localhost:8178` |
+| `WHISPER_LANGUAGE` | Force language (e.g. `he`); blank = auto | _empty_ |
+| `DIARIZE_SERVER_URL` | External WhisperX diarization service | `http://localhost:9000` |
 | `LLM_PROVIDER` | `ollama`/`openai`/`groq`/`openrouter`/`anthropic` | `ollama` |
 | `LLM_BASE_URL` | LLM endpoint | `http://localhost:11434` |
 | `LLM_MODEL` | Model name | `llama3.2` |
@@ -76,8 +88,18 @@ save`/`docker load` them onto the target, and run with the same `.env`.
   `WHISPER_SERVER_URL` to it.
 - **Ollama** (recommended local LLM) — `ollama serve` then `ollama pull
   llama3.2`; set `LLM_BASE_URL=http://<host>:11434`.
+- **WhisperX service** (speaker identification + Hebrew) — see
+  [`whisperx-service/README.md`](whisperx-service/README.md). Run it (natively on
+  Apple Silicon) and set `DIARIZE_SERVER_URL`. Needed only for speaker labels;
+  basic transcription works with just whisper.cpp.
 
-Both can run on the same host or anywhere reachable on your private network.
+All can run on the same host or anywhere reachable on your private network.
+
+### Hebrew
+
+Set `WHISPER_LANGUAGE=he` and run the whisper.cpp server with a **multilingual**
+model (e.g. `ggml-large-v3.bin` or `ggml-medium.bin`, not a `*.en` model). The
+WhisperX service also honours `WHISPERX_LANGUAGE=he`.
 
 ## Local development
 

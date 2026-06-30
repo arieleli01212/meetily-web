@@ -2,6 +2,23 @@
 import httpx
 
 from app.main import app, get_whisper_client
+from app.transcribe import transcribe_audio
+
+
+def test_transcribe_audio_forwards_language():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = request.content.decode("latin-1")
+        return httpx.Response(200, json={"text": "שלום"})
+
+    c = httpx.Client(transport=httpx.MockTransport(handler))
+    text = transcribe_audio(b"RIFFdata", "chunk.wav", "audio/wav",
+                            "http://whisper:8178", c, language="he")
+    assert text == "שלום"
+    # The language must be present in the multipart form forwarded to whisper.
+    assert 'name="language"' in captured["body"]
+    assert "he" in captured["body"]
 
 
 def _override_client(handler):
@@ -15,6 +32,7 @@ def test_transcribe_forwards_to_whisper(client):
     def handler(request):
         captured["path"] = request.url.path
         captured["has_body"] = bool(request.content)
+        captured["body"] = request.content
         return httpx.Response(200, json={"text": "hello from whisper"})
 
     _override_client(handler)

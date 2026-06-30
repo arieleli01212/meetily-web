@@ -56,6 +56,7 @@ export interface RuntimeConfig {
   backend_host: string;
   backend_port: number;
   whisper_server_url: string;
+  whisper_language: string;
   llm_provider: string;
   llm_base_url: string;
   llm_model: string;

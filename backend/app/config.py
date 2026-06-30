@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     # Transcription (external whisper.cpp server, reached by URL)
     whisper_server_url: str = "http://localhost:8178"
+    # Force transcription language (ISO code, e.g. "he" for Hebrew). Empty =
+    # let the whisper server auto-detect.
+    whisper_language: str = ""
 
     # LLM provider (external, reached by URL)
     llm_provider: str = "ollama"  # ollama | openai | anthropic

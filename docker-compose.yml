@@ -15,6 +15,7 @@ services:
       DB_PATH: /data/meetily.db
       # External services — configure for your environment:
       WHISPER_SERVER_URL: ${WHISPER_SERVER_URL:-http://host.docker.internal:8178}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
       LLM_MODEL: ${LLM_MODEL:-llama3.2}

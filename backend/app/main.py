@@ -203,6 +203,7 @@ def get_config():
         "backend_host": s.backend_host,
         "backend_port": s.backend_port,
         "whisper_server_url": s.whisper_server_url,
+        "whisper_language": s.whisper_language,
         "llm_provider": s.llm_provider,
         "llm_base_url": s.llm_base_url,
         "llm_model": s.llm_model,
@@ -258,11 +259,13 @@ def save_meeting_summary(req: MeetingSummaryUpdate, db: Database = Depends(get_d
 async def transcribe(file: UploadFile = File(...),
                      client: httpx.Client = Depends(get_whisper_client)):
     audio = await file.read()
-    whisper_url = get_settings().whisper_server_url
+    settings = get_settings()
+    whisper_url = settings.whisper_server_url
     try:
         text = transcribe_audio(
             audio, file.filename or "audio.wav",
             file.content_type or "audio/wav", whisper_url, client,
+            language=settings.whisper_language,
         )
     except httpx.HTTPError as exc:
         raise HTTPException(

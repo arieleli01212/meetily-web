@@ -74,6 +74,12 @@ export default function SettingsPage() {
               <span className="muted">{config.whisper_server_url}</span>
             </div>
             <div className="row spread">
+              <span>Transcription language</span>
+              <span className="muted">
+                {config.whisper_language || "auto-detect"}
+              </span>
+            </div>
+            <div className="row spread">
               <span>LLM base URL</span>
               <span className="muted">{config.llm_base_url}</span>
             </div>

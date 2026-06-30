@@ -45,6 +45,16 @@ def _load():
     """Load the whisper + diarization models once."""
     if _state:
         return _state
+
+    if not HF_TOKEN:
+        raise RuntimeError(
+            "HF_TOKEN is not set. "
+            "The pyannote speaker-diarization model is gated — you must:\n"
+            "  1. Create a token at https://hf.co/settings/tokens\n"
+            "  2. Accept the model license at https://hf.co/pyannote/speaker-diarization-3.1\n"
+            "  3. Re-start with HF_TOKEN=hf_... set in your environment."
+        )
+
     import whisperx  # imported lazily; heavy dependency
 
     # DiarizationPipeline / assign_word_speakers moved under whisperx.diarize in
@@ -60,16 +70,32 @@ def _load():
         MODEL, DEVICE, compute_type=COMPUTE_TYPE,
         language=DEFAULT_LANGUAGE or None,
     )
-    _state["diarize"] = DiarizationPipeline(
-        use_auth_token=HF_TOKEN or None, device=DEVICE,
+    pipeline = DiarizationPipeline(
+        use_auth_token=HF_TOKEN, device=DEVICE,
     )
+    if pipeline is None or getattr(pipeline, "model", None) is None:
+        # Pipeline.from_pretrained can silently return None when the token is
+        # wrong or the model license hasn't been accepted.
+        _state.clear()
+        raise RuntimeError(
+            "pyannote pipeline failed to load (returned None). "
+            "Check that your HF token is valid and that you have accepted "
+            "the model license at https://hf.co/pyannote/speaker-diarization-3.1"
+        )
+    _state["diarize"] = pipeline
     return _state
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL, "device": DEVICE,
-            "loaded": bool(_state)}
+    token_set = bool(HF_TOKEN)
+    return {
+        "status": "ok",
+        "model": MODEL,
+        "device": DEVICE,
+        "loaded": bool(_state),
+        "hf_token_set": token_set,
+    }
 
 
 @app.post("/transcribe-diarize")

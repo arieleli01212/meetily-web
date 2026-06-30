@@ -16,3 +16,4 @@ def test_health_ok_without_models_loaded():
     assert body["status"] == "ok"
     assert body["loaded"] is False
     assert "model" in body
+    assert "hf_token_set" in body

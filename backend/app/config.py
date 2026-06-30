@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # let the whisper server auto-detect.
     whisper_language: str = ""
 
+    # External WhisperX diarization service (speaker identification), by URL.
+    diarize_server_url: str = "http://localhost:9000"
+
     # LLM provider (external, reached by URL)
     llm_provider: str = "ollama"  # ollama | openai | anthropic
     llm_base_url: str = "http://localhost:11434"

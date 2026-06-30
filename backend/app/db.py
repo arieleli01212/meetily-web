@@ -69,6 +69,7 @@ class Database:
                     audio_start_time REAL,
                     audio_end_time REAL,
                     duration REAL,
+                    speaker TEXT,
                     FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
                 );
                 CREATE TABLE IF NOT EXISTS summary_processes (
@@ -118,6 +119,15 @@ class Database:
                 );
                 """
             )
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Idempotent migrations for DBs created before later columns existed."""
+        with self._connect() as conn:
+            cols = [r[1] for r in conn.execute(
+                "PRAGMA table_info(transcripts)").fetchall()]
+            if "speaker" not in cols:
+                conn.execute("ALTER TABLE transcripts ADD COLUMN speaker TEXT")
 
     # ------------------------------------------------------------------ meetings
     def save_meeting(self, meeting_id: str, title: str,
@@ -165,17 +175,42 @@ class Database:
                         key_points: Optional[str] = None,
                         audio_start_time: Optional[float] = None,
                         audio_end_time: Optional[float] = None,
-                        duration: Optional[float] = None) -> None:
+                        duration: Optional[float] = None,
+                        speaker: Optional[str] = None) -> None:
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO transcripts (id, meeting_id, transcript, timestamp,
                        summary, action_items, key_points, audio_start_time,
-                       audio_end_time, duration)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       audio_end_time, duration, speaker)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (transcript_id, meeting_id, transcript, timestamp, summary,
                  action_items, key_points, audio_start_time, audio_end_time,
-                 duration),
+                 duration, speaker),
             )
+
+    def replace_transcripts(self, meeting_id: str, segments: list[dict]) -> None:
+        """Replace all transcript rows for a meeting with diarized segments.
+
+        Each segment: {start, end, text, speaker}. Used after post-meeting
+        diarization produces speaker-labeled output for the full recording.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM transcripts WHERE meeting_id = ?",
+                         (meeting_id,))
+            for i, seg in enumerate(segments):
+                start = seg.get("start")
+                end = seg.get("end")
+                duration = (end - start) if (start is not None and end is not None) \
+                    else None
+                conn.execute(
+                    """INSERT INTO transcripts (id, meeting_id, transcript,
+                           timestamp, audio_start_time, audio_end_time, duration,
+                           speaker)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (f"{meeting_id}-seg-{i}", meeting_id,
+                     (seg.get("text") or "").strip(), _now(), start, end,
+                     duration, seg.get("speaker")),
+                )
 
     def get_transcripts(self, meeting_id: str) -> list[dict]:
         with self._connect() as conn:

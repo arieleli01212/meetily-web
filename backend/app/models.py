@@ -11,6 +11,7 @@ class Transcript(BaseModel):
     audio_start_time: Optional[float] = None
     audio_end_time: Optional[float] = None
     duration: Optional[float] = None
+    speaker: Optional[str] = None
 
 
 class MeetingResponse(BaseModel):

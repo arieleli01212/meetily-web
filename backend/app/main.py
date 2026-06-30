@@ -9,6 +9,7 @@ from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     UploadFile,
 )
@@ -31,6 +32,7 @@ from app.models import (
     Transcript,
     TranscriptRequest,
 )
+from app.diarize import diarize_audio
 from app.summarizer import run_summary
 from app.transcribe import transcribe_audio
 
@@ -79,6 +81,16 @@ def get_whisper_client() -> httpx.Client:
     return _whisper_client()
 
 
+@lru_cache
+def _diarize_client() -> httpx.Client:
+    return httpx.Client()
+
+
+def get_diarize_client() -> httpx.Client:
+    """HTTP client used to reach the WhisperX service; overridable in tests."""
+    return _diarize_client()
+
+
 # ---------------------------------------------------------------------- meetings
 @app.get("/get-meetings", response_model=list[MeetingResponse])
 def get_meetings(db: Database = Depends(get_db)):
@@ -98,6 +110,7 @@ def get_meeting(meeting_id: str, db: Database = Depends(get_db)):
             audio_start_time=t["audio_start_time"],
             audio_end_time=t["audio_end_time"],
             duration=t["duration"],
+            speaker=t["speaker"],
         )
         for t in db.get_transcripts(meeting_id)
     ]
@@ -204,6 +217,7 @@ def get_config():
         "backend_port": s.backend_port,
         "whisper_server_url": s.whisper_server_url,
         "whisper_language": s.whisper_language,
+        "diarize_server_url": s.diarize_server_url,
         "llm_provider": s.llm_provider,
         "llm_base_url": s.llm_base_url,
         "llm_model": s.llm_model,
@@ -273,6 +287,45 @@ async def transcribe(file: UploadFile = File(...),
             detail=f"Whisper server unreachable at {whisper_url}: {exc}",
         )
     return {"text": text}
+
+
+@app.post("/transcribe-diarized")
+async def transcribe_diarized(
+    file: UploadFile = File(...),
+    meeting_id: str = Form(None),
+    meeting_title: str = Form("Untitled meeting"),
+    min_speakers: int = Form(None),
+    max_speakers: int = Form(None),
+    db: Database = Depends(get_db),
+    client: httpx.Client = Depends(get_diarize_client),
+):
+    """Post-meeting diarized transcription: forward the full recording to the
+    WhisperX service and replace the meeting's transcript with speaker-labeled
+    segments. Creates the meeting if no meeting_id is given."""
+    settings = get_settings()
+    audio = await file.read()
+    mid = meeting_id or new_id()
+    if not db.get_meeting(mid):
+        db.save_meeting(mid, meeting_title)
+    try:
+        result = diarize_audio(
+            audio, file.filename or "audio.wav",
+            file.content_type or "audio/wav", settings.diarize_server_url,
+            client, language=settings.whisper_language,
+            min_speakers=min_speakers, max_speakers=max_speakers,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Diarization service unreachable at "
+                   f"{settings.diarize_server_url}: {exc}",
+        )
+    db.replace_transcripts(mid, result["segments"])
+    return {
+        "meeting_id": mid,
+        "language": result["language"],
+        "segments": result["segments"],
+    }
 
 
 @app.get("/health")

@@ -1,7 +1,9 @@
 """FastAPI application — a faithful web clone of the meetily backend API."""
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
 import json
+import logging
 
 import httpx
 from fastapi import (
@@ -17,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import Database, new_id
+from app.health import run_startup_checks
 from app.llm import build_provider
 from app.models import (
     DeleteMeetingRequest,
@@ -36,7 +39,16 @@ from app.diarize import diarize_audio
 from app.summarizer import run_summary
 from app.transcribe import transcribe_audio
 
-app = FastAPI(title="Meetily Web Backend")
+logger = logging.getLogger("meetily")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    run_startup_checks(get_settings())
+    yield
+
+
+app = FastAPI(title="Meetily Web Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -331,8 +343,14 @@ async def transcribe_diarized(
 @app.get("/health")
 def health():
     s = get_settings()
+    checks = run_startup_checks(s)
+    services = {
+        name: {"status": r["status"], "url": r.get("url", "")}
+        for name, r in checks.items()
+    }
     return {
         "status": "ok",
         "whisper_server_url": s.whisper_server_url,
         "llm_base_url": s.llm_base_url,
+        "services": services,
     }

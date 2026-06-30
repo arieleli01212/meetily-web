@@ -37,7 +37,12 @@ def test_get_config_exposes_connection_params(client):
 
 
 def test_health(client):
-    health = client.get("/health").json()
+    import httpx
+    from unittest.mock import patch
+    with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
+        health = client.get("/health").json()
     assert health["status"] == "ok"
     assert "whisper_server_url" in health
     assert "llm_base_url" in health
+    assert "services" in health
+    assert set(health["services"].keys()) == {"whisper", "diarize", "llm"}

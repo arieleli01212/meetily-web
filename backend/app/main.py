@@ -4,6 +4,9 @@ from functools import lru_cache
 
 import json
 import logging
+import os
+import tempfile
+import time
 
 import httpx
 from fastapi import (
@@ -13,12 +16,15 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.db import Database, new_id
+from app.diarize import diarize_audio
 from app.health import run_startup_checks
 from app.llm import build_provider
 from app.models import (
@@ -35,7 +41,6 @@ from app.models import (
     Transcript,
     TranscriptRequest,
 )
-from app.diarize import diarize_audio
 from app.summarizer import run_summary
 from app.transcribe import transcribe_audio
 
@@ -60,19 +65,38 @@ app.add_middleware(
 )
 
 
+# ----------------------------------------------------------------- middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    t0 = time.perf_counter()
+    logger.info("→ %s %s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.error("  ✗ %s %s  unhandled: %s", request.method, request.url.path, exc)
+        raise
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    logger.info(
+        "← %s %s  %d  %.0fms",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
+
+# ---------------------------------------------------------------- singletons
 @lru_cache
 def _default_db() -> Database:
     return Database(get_settings().db_path)
 
 
 def get_db() -> Database:
-    """Dependency returning the database; overridable in tests."""
     return _default_db()
 
 
 def get_provider(db: Database = Depends(get_db)):
-    """Build the configured LLM provider, preferring saved runtime settings
-    over env defaults. Overridable in tests."""
     s = get_settings()
     cfg = db.get_model_config()
     provider = (cfg or {}).get("provider", s.llm_provider)
@@ -89,7 +113,6 @@ def _whisper_client() -> httpx.Client:
 
 
 def get_whisper_client() -> httpx.Client:
-    """HTTP client used to reach the whisper server; overridable in tests."""
     return _whisper_client()
 
 
@@ -99,7 +122,6 @@ def _diarize_client() -> httpx.Client:
 
 
 def get_diarize_client() -> httpx.Client:
-    """HTTP client used to reach the WhisperX service; overridable in tests."""
     return _diarize_client()
 
 
@@ -178,8 +200,6 @@ def get_model_config(db: Database = Depends(get_db)):
     cfg = db.get_model_config()
     if cfg:
         return cfg
-    # Fall back to env defaults so an air-gapped install works before any
-    # config has been saved through the UI.
     return {
         "provider": settings.llm_provider,
         "model": settings.llm_model,
@@ -208,8 +228,9 @@ def get_transcript_config(db: Database = Depends(get_db)):
 
 
 @app.post("/save-transcript-config")
-def save_transcript_config(req: SaveTranscriptConfigRequest,
-                           db: Database = Depends(get_db)):
+def save_transcript_config(
+    req: SaveTranscriptConfigRequest, db: Database = Depends(get_db)
+):
     db.save_transcript_config(req.provider, req.model, req.apiKey)
     return {"status": "success", "message": "Transcript config saved"}
 
@@ -222,7 +243,6 @@ def get_transcript_api_key(req: GetApiKeyRequest, db: Database = Depends(get_db)
 # ----------------------------------------------------------- runtime config/health
 @app.get("/get-config")
 def get_config():
-    """Expose non-secret connection parameters for the settings UI."""
     s = get_settings()
     return {
         "backend_host": s.backend_host,
@@ -240,9 +260,12 @@ def get_config():
 
 # ------------------------------------------------------------------- summaries
 @app.post("/process-transcript")
-def process_transcript(req: TranscriptRequest, background: BackgroundTasks,
-                       db: Database = Depends(get_db),
-                       provider=Depends(get_provider)):
+def process_transcript(
+    req: TranscriptRequest,
+    background: BackgroundTasks,
+    db: Database = Depends(get_db),
+    provider=Depends(get_provider),
+):
     if not db.get_meeting(req.meeting_id):
         raise HTTPException(status_code=404, detail="Meeting not found")
     s = get_settings()
@@ -250,11 +273,23 @@ def process_transcript(req: TranscriptRequest, background: BackgroundTasks,
     chunk_size = req.chunk_size or s.chunk_size
     overlap = req.overlap if req.overlap is not None else s.chunk_overlap
     db.save_transcript_chunk(
-        meeting_id=req.meeting_id, transcript_text=text, model=req.model,
-        model_name=req.model_name, chunk_size=chunk_size, overlap=overlap,
+        meeting_id=req.meeting_id,
+        transcript_text=text,
+        model=req.model,
+        model_name=req.model_name,
+        chunk_size=chunk_size,
+        overlap=overlap,
     )
-    background.add_task(run_summary, req.meeting_id, text, provider, db,
-                        chunk_size, overlap, req.custom_prompt)
+    logger.info(
+        "process_transcript  meeting=%s  chars=%d  chunks≈%d",
+        req.meeting_id,
+        len(text),
+        max(1, len(text) // max(1, chunk_size)),
+    )
+    background.add_task(
+        run_summary, req.meeting_id, text, provider, db, chunk_size, overlap,
+        req.custom_prompt,
+    )
     return {"status": "processing", "process_id": req.meeting_id}
 
 
@@ -275,22 +310,28 @@ def get_summary(meeting_id: str, db: Database = Depends(get_db)):
 @app.post("/save-meeting-summary")
 def save_meeting_summary(req: MeetingSummaryUpdate, db: Database = Depends(get_db)):
     db.create_process(req.meeting_id)
-    db.update_process(req.meeting_id, status="completed",
-                      result=json.dumps(req.summary))
+    db.update_process(
+        req.meeting_id, status="completed", result=json.dumps(req.summary)
+    )
     return {"status": "success", "message": "Summary saved"}
 
 
 # ---------------------------------------------------------------- transcription
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...),
-                     client: httpx.Client = Depends(get_whisper_client)):
+async def transcribe(
+    file: UploadFile = File(...),
+    client: httpx.Client = Depends(get_whisper_client),
+):
     audio = await file.read()
     settings = get_settings()
     whisper_url = settings.whisper_server_url
     try:
         text = transcribe_audio(
-            audio, file.filename or "audio.wav",
-            file.content_type or "audio/wav", whisper_url, client,
+            audio,
+            file.filename or "audio.wav",
+            file.content_type or "audio/wav",
+            whisper_url,
+            client,
             language=settings.whisper_language,
         )
     except httpx.HTTPError as exc:
@@ -301,8 +342,66 @@ async def transcribe(file: UploadFile = File(...),
     return {"text": text}
 
 
+# ----------------------------------------------------------------- diarization
+def _run_diarize_job(
+    meeting_id: str,
+    tmp_path: str,
+    filename: str,
+    content_type: str,
+    language: str,
+    min_speakers: int | None,
+    max_speakers: int | None,
+    diarize_url: str,
+    db: Database,
+    client: httpx.Client | None = None,
+) -> None:
+    """Runs in a background thread. Calls WhisperX, persists results to DB."""
+    if client is None:
+        client = httpx.Client()
+    try:
+        logger.info("diarize_job  meeting=%s  step=sending", meeting_id)
+        db.update_diarize_job(meeting_id, status="processing", step="sending")
+
+        result = diarize_audio(
+            audio_path=tmp_path,
+            filename=filename,
+            content_type=content_type,
+            diarize_url=diarize_url,
+            client=client,
+            language=language,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+
+        seg_count = len(result["segments"])
+        logger.info(
+            "diarize_job  meeting=%s  step=saving  segments=%d", meeting_id, seg_count
+        )
+        db.update_diarize_job(meeting_id, status="processing", step="saving")
+        db.replace_transcripts(meeting_id, result["segments"])
+
+        db.update_diarize_job(
+            meeting_id, status="completed", step="completed", segments_count=seg_count
+        )
+        logger.info(
+            "diarize_job  meeting=%s  ✓  segments=%d  lang=%s",
+            meeting_id,
+            seg_count,
+            result.get("language", "?"),
+        )
+    except Exception as exc:
+        logger.error("diarize_job  meeting=%s  ✗  %s", meeting_id, exc)
+        db.update_diarize_job(meeting_id, status="failed", step="failed", error=str(exc))
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 @app.post("/transcribe-diarized")
 async def transcribe_diarized(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     meeting_id: str = Form(None),
     meeting_title: str = Form("Untitled meeting"),
@@ -311,32 +410,79 @@ async def transcribe_diarized(
     db: Database = Depends(get_db),
     client: httpx.Client = Depends(get_diarize_client),
 ):
-    """Post-meeting diarized transcription: forward the full recording to the
-    WhisperX service and replace the meeting's transcript with speaker-labeled
-    segments. Creates the meeting if no meeting_id is given."""
+    """Accept the full recording and start a background diarization job.
+
+    Returns immediately with {meeting_id, status: "processing"} so the
+    frontend can start polling /diarize-status/{meeting_id}. The audio file
+    is streamed to a temp file (no large in-memory buffer) and cleaned up
+    after the job finishes.
+    """
     settings = get_settings()
-    audio = await file.read()
+    filename = file.filename or "audio.wav"
+    content_type = file.content_type or "audio/wav"
+    suffix = os.path.splitext(filename)[1] or ".wav"
+
+    # Stream the upload to disk in 1 MB chunks — avoids holding the entire
+    # file (potentially hundreds of MB) in Python memory.
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    total_bytes = 0
+    try:
+        while True:
+            chunk = await file.read(1 * 1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+            total_bytes += len(chunk)
+        tmp.flush()
+        tmp_path = tmp.name
+    finally:
+        tmp.close()
+
+    mb = total_bytes / 1024 / 1024
+    logger.info(
+        "transcribe_diarized  file=%s  size=%.1f MB  meeting=%s",
+        filename,
+        mb,
+        meeting_id or "(new)",
+    )
+
     mid = meeting_id or new_id()
     if not db.get_meeting(mid):
         db.save_meeting(mid, meeting_title)
-    try:
-        result = diarize_audio(
-            audio, file.filename or "audio.wav",
-            file.content_type or "audio/wav", settings.diarize_server_url,
-            client, language=settings.whisper_language,
-            min_speakers=min_speakers, max_speakers=max_speakers,
-        )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Diarization service unreachable at "
-                   f"{settings.diarize_server_url}: {exc}",
-        )
-    db.replace_transcripts(mid, result["segments"])
+    db.create_diarize_job(mid)
+
+    background_tasks.add_task(
+        _run_diarize_job,
+        mid,
+        tmp_path,
+        filename,
+        content_type,
+        settings.whisper_language,
+        min_speakers,
+        max_speakers,
+        settings.diarize_server_url,
+        db,
+        client,
+    )
+
+    logger.info("transcribe_diarized  meeting=%s  job queued", mid)
+    return {"meeting_id": mid, "status": "processing"}
+
+
+@app.get("/diarize-status/{meeting_id}")
+def diarize_status(meeting_id: str, db: Database = Depends(get_db)):
+    """Poll the status of a background diarization job."""
+    job = db.get_diarize_job(meeting_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="No diarization job found")
     return {
-        "meeting_id": mid,
-        "language": result["language"],
-        "segments": result["segments"],
+        "meeting_id": meeting_id,
+        "status": job["status"],
+        "step": job.get("step"),
+        "error": job.get("error"),
+        "segments_count": job.get("segments_count"),
+        "created_at": job["created_at"],
+        "updated_at": job["updated_at"],
     }
 
 

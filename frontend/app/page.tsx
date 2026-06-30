@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, Meeting } from "@/lib/api";
 import { initials } from "@/lib/format";
+import DiarizeProgress from "@/components/DiarizeProgress";
 import {
   AlertIcon,
   ListIcon,
@@ -25,6 +26,7 @@ export default function MeetingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [importJobId, setImportJobId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -78,7 +80,8 @@ export default function MeetingsPage() {
       const { meeting_id } = await api.transcribeDiarized(file, {
         meeting_title: file.name,
       });
-      router.push(`/meeting/${meeting_id}`);
+      // Show inline progress; navigation happens when the job completes.
+      setImportJobId(meeting_id);
     } catch (err) {
       setError(`Import failed: ${err}`);
     } finally {
@@ -143,6 +146,19 @@ export default function MeetingsPage() {
         <div className="alert err">
           <AlertIcon size={18} />
           <span>{error}</span>
+        </div>
+      )}
+
+      {importJobId && (
+        <div style={{ marginBottom: 24 }}>
+          <DiarizeProgress
+            meetingId={importJobId}
+            onComplete={(id) => router.push(`/meeting/${id}`)}
+            onError={(err) => {
+              setError(err);
+              setImportJobId(null);
+            }}
+          />
         </div>
       )}
 

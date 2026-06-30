@@ -117,6 +117,15 @@ class Database:
                     groqApiKey TEXT,
                     openaiApiKey TEXT
                 );
+                CREATE TABLE IF NOT EXISTS diarize_jobs (
+                    meeting_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    step TEXT,
+                    error TEXT,
+                    segments_count INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
         self._migrate()
@@ -358,6 +367,37 @@ class Database:
                 f"SELECT {field} AS key FROM transcript_settings WHERE id = 'default'"
             ).fetchone()
             return row["key"] if row else None
+
+
+    # ----------------------------------------------------------- diarize jobs
+    def create_diarize_job(self, meeting_id: str) -> None:
+        now = _now()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO diarize_jobs (meeting_id, status, step, created_at, updated_at)
+                   VALUES (?, 'queued', 'queued', ?, ?)
+                   ON CONFLICT(meeting_id) DO UPDATE SET status='queued', step='queued',
+                       error=NULL, segments_count=NULL, updated_at=excluded.updated_at""",
+                (meeting_id, now, now),
+            )
+
+    def update_diarize_job(self, meeting_id: str, **fields: Any) -> None:
+        if not fields:
+            return
+        fields["updated_at"] = _now()
+        columns = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [meeting_id]
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE diarize_jobs SET {columns} WHERE meeting_id = ?", values
+            )
+
+    def get_diarize_job(self, meeting_id: str) -> Optional[dict]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM diarize_jobs WHERE meeting_id = ?", (meeting_id,)
+            ).fetchone()
+            return dict(row) if row else None
 
 
 def new_id() -> str:

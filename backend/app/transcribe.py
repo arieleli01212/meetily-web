@@ -1,35 +1,58 @@
-"""Proxy browser-captured audio to an external whisper.cpp server.
-
-The browser records audio and POSTs it here; we forward it to the configured
-WHISPER_SERVER_URL (a whisper.cpp HTTP server exposing ``/inference``) and
-return the transcript text. Keeping whisper external means the air-gapped
-deployment just points at a local whisper container by URL.
-"""
+"""Proxy browser-captured audio to an external whisper.cpp server."""
 from __future__ import annotations
 
+import logging
+import time
+
 import httpx
+
+logger = logging.getLogger("meetily.transcribe")
 
 WHISPER_TIMEOUT = 300.0
 
 
-def transcribe_audio(audio: bytes, filename: str, content_type: str,
-                     whisper_url: str, client: httpx.Client,
-                     language: str = "") -> str:
+def transcribe_audio(
+    audio: bytes,
+    filename: str,
+    content_type: str,
+    whisper_url: str,
+    client: httpx.Client,
+    language: str = "",
+) -> str:
+    kb = len(audio) / 1024
+    logger.info(
+        "→ transcribe  file=%s  size=%.1f KB  url=%s  lang=%s",
+        filename,
+        kb,
+        whisper_url,
+        language or "auto",
+    )
+
     files = {"file": (filename, audio, content_type or "audio/wav")}
-    # whisper.cpp server returns plain text or JSON depending on params; ask
-    # for JSON and tolerate both.
-    data = {"response_format": "json"}
-    # Force a language (e.g. "he" for Hebrew) when configured; otherwise the
-    # whisper server auto-detects. Forcing avoids mis-detection on short chunks.
+    data: dict[str, str] = {"response_format": "json"}
     if language:
         data["language"] = language
+
+    t0 = time.perf_counter()
     resp = client.post(
         f"{whisper_url.rstrip('/')}/inference",
-        files=files, data=data, timeout=WHISPER_TIMEOUT,
+        files=files,
+        data=data,
+        timeout=WHISPER_TIMEOUT,
     )
+    elapsed = time.perf_counter() - t0
     resp.raise_for_status()
+
     ctype = resp.headers.get("content-type", "")
     if "application/json" in ctype:
         body = resp.json()
-        return (body.get("text") or "").strip()
-    return resp.text.strip()
+        text = (body.get("text") or "").strip()
+    else:
+        text = resp.text.strip()
+
+    logger.info(
+        "← transcribe  chars=%d  elapsed=%.2fs",
+        len(text),
+        elapsed,
+    )
+    return text

@@ -116,8 +116,8 @@ export const api = {
   getConfig: () => req<RuntimeConfig>("/get-config"),
   health: () => req<{ status: string }>("/health"),
   transcribeUrl: () => `${API_BASE}/transcribe`,
-  // Post-meeting diarized transcription of a full recording. Returns the
-  // meeting id and speaker-labeled segments.
+  // Start a background diarization job. Returns immediately — the job runs
+  // server-side. Poll getDiarizeStatus() until status === "completed" | "failed".
   transcribeDiarized: async (
     audio: Blob,
     opts: { meeting_id?: string; meeting_title?: string },
@@ -131,10 +131,17 @@ export const api = {
       body: form,
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-    return res.json() as Promise<{
-      meeting_id: string;
-      language: string;
-      segments: Array<{ start: number; end: number; text: string; speaker: string }>;
-    }>;
+    return res.json() as Promise<{ meeting_id: string; status: string }>;
   },
+
+  getDiarizeStatus: (meeting_id: string) =>
+    req<{
+      meeting_id: string;
+      status: string; // queued | processing | completed | failed
+      step: string | null;
+      error: string | null;
+      segments_count: number | null;
+      created_at: string;
+      updated_at: string;
+    }>(`/diarize-status/${meeting_id}`),
 };

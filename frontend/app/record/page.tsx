@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Recorder } from "@/lib/recorder";
 import { api, TranscriptLine } from "@/lib/api";
 import { formatClock } from "@/lib/format";
+import DiarizeProgress from "@/components/DiarizeProgress";
 import {
   AlertIcon,
   FileTextIcon,
@@ -21,6 +22,7 @@ export default function RecordPage() {
   const [identifySpeakers, setIdentifySpeakers] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [diarizeJobId, setDiarizeJobId] = useState<string | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -82,8 +84,15 @@ export default function RecordPage() {
       if (identifySpeakers) {
         const wav = rec?.getFullWav();
         if (wav) {
-          setStatus("Identifying speakers… (this can take a while)");
-          await api.transcribeDiarized(wav, { meeting_id });
+          setStatus("Uploading recording for speaker identification…");
+          const { meeting_id: mid } = await api.transcribeDiarized(wav, {
+            meeting_id,
+          });
+          // Show inline progress widget; navigate when the job finishes.
+          setSaving(false);
+          setStatus(null);
+          setDiarizeJobId(mid);
+          return;
         }
       }
       router.push(`/meeting/${meeting_id}`);
@@ -189,6 +198,19 @@ export default function RecordPage() {
           </span>
         </label>
       </div>
+
+      {diarizeJobId && (
+        <div style={{ marginTop: 24 }}>
+          <DiarizeProgress
+            meetingId={diarizeJobId}
+            onComplete={(id) => router.push(`/meeting/${id}`)}
+            onError={(err) => {
+              setError(err);
+              setDiarizeJobId(null);
+            }}
+          />
+        </div>
+      )}
 
       <div className="section-head">
         <FileTextIcon size={16} />

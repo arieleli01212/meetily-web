@@ -1,16 +1,13 @@
-"""Transcript summarization.
-
-Splits a transcript into overlapping chunks, asks the configured LLM to
-summarize each into a structured object, and merges the chunk results into a
-single ``{summary, action_items, key_points}`` payload — mirroring meetily's
-process-transcript behaviour.
-"""
+"""Transcript summarization with per-chunk progress logging."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Optional
+
+logger = logging.getLogger("meetily.summarizer")
 
 SYSTEM_PROMPT = (
     "You are a meeting summarization assistant. Summarize the transcript chunk "
@@ -20,8 +17,6 @@ SYSTEM_PROMPT = (
 
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
-    """Split text into chunks of ``chunk_size`` with ``overlap`` characters
-    shared between consecutive chunks."""
     if chunk_size <= 0:
         return [text]
     if len(text) <= chunk_size:
@@ -29,7 +24,7 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     step = max(1, chunk_size - max(0, overlap))
     chunks = []
     for start in range(0, len(text), step):
-        chunk = text[start:start + chunk_size]
+        chunk = text[start : start + chunk_size]
         if chunk:
             chunks.append(chunk)
         if start + chunk_size >= len(text):
@@ -38,8 +33,6 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 
 def _parse_response(raw: str) -> dict:
-    """Parse an LLM response into the structured summary shape, tolerating
-    plain-text or fenced-JSON responses."""
     text = raw.strip()
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
@@ -55,20 +48,43 @@ def _parse_response(raw: str) -> dict:
     return {"summary": text, "action_items": [], "key_points": []}
 
 
-def summarize_transcript(text: str, provider, chunk_size: int, overlap: int,
-                         custom_prompt: Optional[str] = None) -> dict:
-    """Summarize ``text`` using ``provider``, returning a merged structured
-    summary. ``provider`` is any object exposing ``complete(prompt, system)``."""
+def summarize_transcript(
+    text: str,
+    provider,
+    chunk_size: int,
+    overlap: int,
+    custom_prompt: Optional[str] = None,
+) -> dict:
     chunks = chunk_text(text, chunk_size, overlap)
+    total = len(chunks)
+    logger.info(
+        "summarize  total_chars=%d  chunks=%d  chunk_size=%d  overlap=%d",
+        len(text),
+        total,
+        chunk_size,
+        overlap,
+    )
+
     summaries: list[str] = []
     action_items: list[str] = []
     key_points: list[str] = []
 
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks, 1):
+        logger.info("  chunk %d/%d  chars=%d  → LLM …", i, total, len(chunk))
+        t0 = time.perf_counter()
         instruction = custom_prompt or "Summarize this meeting transcript chunk."
         prompt = f"{instruction}\n\nTranscript chunk:\n{chunk}"
         raw = provider.complete(prompt, system=SYSTEM_PROMPT)
         parsed = _parse_response(raw)
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "  chunk %d/%d  ✓  %.2fs  actions=%d  points=%d",
+            i,
+            total,
+            elapsed,
+            len(parsed["action_items"]),
+            len(parsed["key_points"]),
+        )
         if parsed["summary"]:
             summaries.append(parsed["summary"])
         action_items.extend(parsed["action_items"])
@@ -81,27 +97,47 @@ def summarize_transcript(text: str, provider, chunk_size: int, overlap: int,
     }
 
 
-def run_summary(meeting_id: str, text: str, provider, db, chunk_size: int,
-                overlap: int, custom_prompt: Optional[str] = None) -> None:
-    """Orchestrate a summary run, persisting status/result to summary_processes."""
+def run_summary(
+    meeting_id: str,
+    text: str,
+    provider,
+    db,
+    chunk_size: int,
+    overlap: int,
+    custom_prompt: Optional[str] = None,
+) -> None:
+    logger.info("run_summary  meeting=%s  chars=%d", meeting_id, len(text))
     start = time.time()
     db.create_process(meeting_id)
     try:
         chunks = chunk_text(text, chunk_size, overlap)
-        result = summarize_transcript(text, provider, chunk_size, overlap,
-                                      custom_prompt)
+        result = summarize_transcript(text, provider, chunk_size, overlap, custom_prompt)
+        elapsed = time.time() - start
+        logger.info(
+            "run_summary  meeting=%s  ✓  chunks=%d  elapsed=%.1fs",
+            meeting_id,
+            len(chunks),
+            elapsed,
+        )
         db.update_process(
             meeting_id,
             status="completed",
             result=json.dumps(result),
             chunk_count=len(chunks),
-            processing_time=time.time() - start,
+            processing_time=elapsed,
             end_time=None,
         )
-    except Exception as exc:  # noqa: BLE001 — surface any provider/parse failure
+    except Exception as exc:
+        elapsed = time.time() - start
+        logger.error(
+            "run_summary  meeting=%s  ✗  %.1fs  error=%s",
+            meeting_id,
+            elapsed,
+            exc,
+        )
         db.update_process(
             meeting_id,
             status="failed",
             error=str(exc),
-            processing_time=time.time() - start,
+            processing_time=elapsed,
         )

@@ -47,12 +47,20 @@ def _load():
         return _state
     import whisperx  # imported lazily; heavy dependency
 
+    # DiarizationPipeline / assign_word_speakers moved under whisperx.diarize in
+    # the 3.3.x line; fall back to the top-level names for older releases.
+    try:
+        from whisperx.diarize import DiarizationPipeline, assign_word_speakers
+    except ImportError:  # pragma: no cover - depends on installed version
+        from whisperx import DiarizationPipeline, assign_word_speakers
+
     _state["whisperx"] = whisperx
+    _state["assign_word_speakers"] = assign_word_speakers
     _state["model"] = whisperx.load_model(
         MODEL, DEVICE, compute_type=COMPUTE_TYPE,
         language=DEFAULT_LANGUAGE or None,
     )
-    _state["diarize"] = whisperx.DiarizationPipeline(
+    _state["diarize"] = DiarizationPipeline(
         use_auth_token=HF_TOKEN or None, device=DEVICE,
     )
     return _state
@@ -104,7 +112,7 @@ async def transcribe_diarize(
         diarize_segments = state["diarize"](
             audio, min_speakers=min_speakers, max_speakers=max_speakers,
         )
-        result = whisperx.assign_word_speakers(diarize_segments, result)
+        result = state["assign_word_speakers"](diarize_segments, result)
 
         segments = [
             {

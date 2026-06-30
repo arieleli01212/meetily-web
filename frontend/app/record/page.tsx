@@ -1,9 +1,17 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Recorder } from "@/lib/recorder";
 import { api, TranscriptLine } from "@/lib/api";
+import { formatClock } from "@/lib/format";
+import {
+  AlertIcon,
+  FileTextIcon,
+  MicIcon,
+  StopIcon,
+  UsersIcon,
+} from "@/components/Icons";
 
 export default function RecordPage() {
   const router = useRouter();
@@ -12,9 +20,26 @@ export default function RecordPage() {
   const [systemAudio, setSystemAudio] = useState(false);
   const [identifySpeakers, setIdentifySpeakers] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const recorderRef = useRef<Recorder | null>(null);
+  const linesEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Live elapsed-time clock while recording.
+  useEffect(() => {
+    if (!recording) return;
+    const started = Date.now();
+    setElapsed(0);
+    const t = setInterval(() => setElapsed((Date.now() - started) / 1000), 250);
+    return () => clearInterval(t);
+  }, [recording]);
+
+  // Keep the newest transcript chunk in view.
+  useEffect(() => {
+    linesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [lines]);
 
   async function start() {
     setError(null);
@@ -36,6 +61,7 @@ export default function RecordPage() {
 
   async function stopAndSave() {
     const rec = recorderRef.current;
+    setSaving(true);
     await rec?.stop();
     setRecording(false);
     const now = new Date().toISOString();
@@ -64,76 +90,125 @@ export default function RecordPage() {
     } catch (e) {
       setError(`Failed: ${e}`);
       setStatus(null);
+      setSaving(false);
     }
   }
 
   return (
-    <div>
-      <h1>Record meeting</h1>
+    <div className="fade-in">
+      <div className="page-head">
+        <div>
+          <h1>Record meeting</h1>
+          <div className="subtitle">
+            Audio is transcribed in short chunks as you speak.
+          </div>
+        </div>
+      </div>
 
-      <div className="card">
-        <label>Meeting title</label>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} />
+      {error && (
+        <div className="alert err">
+          <AlertIcon size={18} />
+          <span>{error}</span>
+        </div>
+      )}
 
-        <label className="row" style={{ marginTop: 12 }}>
+      <div className="card pad-lg">
+        <div className="rec-stage">
+          <div className={`rec-orb${recording ? " live" : ""}`}>
+            <MicIcon size={34} />
+          </div>
+          <div className="rec-timer">{formatClock(elapsed)}</div>
+          {recording ? (
+            <span className="badge err">
+              <span className="dot" />
+              Recording
+            </span>
+          ) : (
+            <span className="muted">Ready to record</span>
+          )}
+
+          <div className="row" style={{ marginTop: 8 }}>
+            {!recording ? (
+              <button className="btn lg" onClick={start} disabled={saving}>
+                <MicIcon size={18} />
+                Start recording
+              </button>
+            ) : (
+              <button className="btn danger lg" onClick={stopAndSave} disabled={saving}>
+                <StopIcon size={18} />
+                Stop &amp; save
+              </button>
+            )}
+          </div>
+          {status && <p className="muted">{status}</p>}
+        </div>
+
+        <div className="divider" />
+
+        <div className="field">
+          <label>Meeting title</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            disabled={recording}
+          />
+        </div>
+
+        <label className="switch" style={{ marginBottom: 14 }}>
           <input
             type="checkbox"
             checked={systemAudio}
             disabled={recording}
             onChange={(e) => setSystemAudio(e.target.checked)}
-            style={{ width: "auto" }}
           />
-          <span style={{ marginLeft: 8 }}>
-            Also capture system / tab audio (screen-share prompt)
+          <span className="track" />
+          <span>
+            <span className="switch-label">Capture system / tab audio</span>
+            <br />
+            <span className="switch-sub">Prompts to share a screen or tab</span>
           </span>
         </label>
 
-        <label className="row">
+        <label className="switch">
           <input
             type="checkbox"
             checked={identifySpeakers}
             disabled={recording}
             onChange={(e) => setIdentifySpeakers(e.target.checked)}
-            style={{ width: "auto" }}
           />
-          <span style={{ marginLeft: 8 }}>
-            Identify speakers (diarize full recording after stop)
+          <span className="track" />
+          <span>
+            <span className="switch-label">
+              <UsersIcon size={14} style={{ verticalAlign: "-2px", marginRight: 6 }} />
+              Identify speakers
+            </span>
+            <br />
+            <span className="switch-sub">
+              Diarizes the full recording after you stop
+            </span>
           </span>
         </label>
-
-        <div className="row" style={{ marginTop: 14 }}>
-          {!recording ? (
-            <button className="btn" onClick={start}>
-              ● Start recording
-            </button>
-          ) : (
-            <button className="btn danger" onClick={stopAndSave}>
-              ■ Stop & save
-            </button>
-          )}
-          {recording && <span className="pill ok">recording…</span>}
-        </div>
-        {status && (
-          <p className="muted" style={{ marginTop: 10 }}>
-            {status}
-          </p>
-        )}
       </div>
 
-      {error && <div className="card pill err">{error}</div>}
-
-      <h2>Live transcript</h2>
+      <div className="section-head">
+        <FileTextIcon size={16} />
+        <h2>Live transcript</h2>
+      </div>
       <div className="card">
-        {lines.length === 0 && (
-          <p className="muted">
+        {lines.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>
             Transcript chunks will appear here as you speak.
           </p>
-        )}
-        {lines.map((l, i) => (
-          <div className="transcript-line" key={i}>
-            {l}
+        ) : (
+          <div className="transcript">
+            {lines.map((l, i) => (
+              <div className="t-flat fade-in" key={i}>
+                {l}
+              </div>
+            ))}
+            <div ref={linesEndRef} />
           </div>
-        ))}
+        )}
       </div>
     </div>
   );

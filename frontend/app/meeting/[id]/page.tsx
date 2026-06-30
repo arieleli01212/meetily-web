@@ -3,6 +3,14 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, MeetingDetails, SummaryStatus } from "@/lib/api";
+import { speakerColor, speakerLabel } from "@/lib/format";
+import {
+  AlertIcon,
+  CheckIcon,
+  DownloadIcon,
+  FileTextIcon,
+  SparklesIcon,
+} from "@/components/Icons";
 
 export default function MeetingPage() {
   const params = useParams();
@@ -11,6 +19,7 @@ export default function MeetingPage() {
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState<SummaryStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [savedTitle, setSavedTitle] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
@@ -30,6 +39,7 @@ export default function MeetingPage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   // Poll while a summary is processing.
@@ -56,15 +66,15 @@ export default function MeetingPage() {
 
   async function onSaveTitle() {
     await api.saveMeetingTitle(id, title);
+    setSavedTitle(true);
+    setTimeout(() => setSavedTitle(false), 1800);
     load();
   }
 
   function onExport() {
     if (!meeting) return;
     const lines = meeting.transcripts
-      .map((t) =>
-        t.speaker ? `${t.speaker.replace("SPEAKER_", "Speaker ")}: ${t.text}` : t.text,
-      )
+      .map((t) => (t.speaker ? `${speakerLabel(t.speaker)}: ${t.text}` : t.text))
       .join("\n");
     const s = summary?.result;
     let md = `# ${meeting.title}\n\n## Transcript\n\n${lines}\n`;
@@ -83,84 +93,160 @@ export default function MeetingPage() {
     URL.revokeObjectURL(url);
   }
 
-  if (error) return <div className="card pill err">{error}</div>;
-  if (!meeting) return <p className="muted">Loading…</p>;
+  if (error)
+    return (
+      <div className="alert err fade-in">
+        <AlertIcon size={18} />
+        <span>{error}</span>
+      </div>
+    );
+  if (!meeting)
+    return (
+      <div className="col fade-in">
+        <div className="skeleton" style={{ height: 40, width: "50%" }} />
+        <div className="skeleton card" style={{ height: 120 }} />
+        <div className="skeleton card" style={{ height: 200 }} />
+      </div>
+    );
 
   const result = summary?.result;
+  const status = summary?.status ?? "none";
+  const statusClass =
+    status === "completed" ? "ok" : status === "failed" ? "err" : "warn";
+  const hasSpeakers = meeting.transcripts.some((t) => t.speaker);
 
   return (
-    <div>
-      <div className="row spread">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          style={{ maxWidth: 480 }}
-        />
+    <div className="fade-in">
+      <div className="page-head">
+        <div className="search grow" style={{ maxWidth: 520 }}>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            style={{ fontSize: 18, fontWeight: 600 }}
+            aria-label="Meeting title"
+          />
+        </div>
         <div className="row">
           <button className="btn secondary" onClick={onSaveTitle}>
-            Save title
+            {savedTitle ? <CheckIcon size={16} /> : null}
+            {savedTitle ? "Saved" : "Save title"}
           </button>
           <button className="btn secondary" onClick={onExport}>
-            Export .md
+            <DownloadIcon size={16} />
+            Export
           </button>
         </div>
       </div>
 
-      <h2>Summary</h2>
-      <div className="card">
+      <div className="section-head" style={{ marginTop: 0 }}>
+        <SparklesIcon size={16} />
+        <h2>Summary</h2>
+      </div>
+      <div className="card pad-lg">
         <div className="row spread">
-          <span className="pill">{summary?.status ?? "none"}</span>
+          <span className={`badge ${statusClass}`}>
+            <span className="dot" />
+            {status === "none" ? "Not generated" : status}
+          </span>
           <button className="btn" onClick={onGenerate} disabled={busy}>
-            {busy ? "Starting…" : "Generate summary"}
+            <SparklesIcon size={16} />
+            {busy ? "Starting…" : result ? "Regenerate" : "Generate summary"}
           </button>
         </div>
+
         {summary?.error && (
-          <p className="pill err" style={{ marginTop: 10 }}>
-            {summary.error}
+          <div className="alert err" style={{ marginTop: 16, marginBottom: 0 }}>
+            <AlertIcon size={18} />
+            <span>{summary.error}</span>
+          </div>
+        )}
+
+        {status === "processing" && (
+          <p className="muted" style={{ marginTop: 16, marginBottom: 0 }}>
+            Generating… this updates automatically.
           </p>
         )}
+
         {result && (
-          <div style={{ marginTop: 10 }}>
-            <p>{result.summary}</p>
+          <div style={{ marginTop: 18 }}>
+            <div className="summary-block">
+              <p style={{ margin: 0, color: "var(--text-2)" }}>{result.summary}</p>
+            </div>
+
             {result.action_items.length > 0 && (
-              <>
-                <strong>Action items</strong>
-                <ul>
+              <div className="summary-block">
+                <div className="block-title">
+                  <CheckIcon size={14} />
+                  Action items
+                </div>
+                <ul className="check-list">
                   {result.action_items.map((a, i) => (
-                    <li key={i}>{a}</li>
+                    <li key={i}>
+                      <CheckIcon size={15} />
+                      <span>{a}</span>
+                    </li>
                   ))}
                 </ul>
-              </>
+              </div>
             )}
+
             {result.key_points.length > 0 && (
-              <>
-                <strong>Key points</strong>
-                <ul>
+              <div className="summary-block">
+                <div className="block-title">
+                  <SparklesIcon size={14} />
+                  Key points
+                </div>
+                <ul className="check-list">
                   {result.key_points.map((k, i) => (
-                    <li key={i}>{k}</li>
+                    <li key={i}>
+                      <SparklesIcon size={15} />
+                      <span>{k}</span>
+                    </li>
                   ))}
                 </ul>
-              </>
+              </div>
             )}
           </div>
         )}
       </div>
 
-      <h2>Transcript</h2>
-      <div className="card">
-        {meeting.transcripts.length === 0 && (
-          <p className="muted">No transcript lines.</p>
+      <div className="section-head">
+        <FileTextIcon size={16} />
+        <h2>Transcript</h2>
+        {hasSpeakers && (
+          <span className="badge brand" style={{ marginLeft: 4 }}>
+            Speakers identified
+          </span>
         )}
-        {meeting.transcripts.map((t) => (
-          <div className="transcript-line" key={t.id}>
-            {t.speaker && (
-              <span className="pill" style={{ marginRight: 8 }}>
-                {t.speaker.replace("SPEAKER_", "Speaker ")}
-              </span>
-            )}
-            {t.text}
+      </div>
+      <div className="card">
+        {meeting.transcripts.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>
+            No transcript lines.
+          </p>
+        ) : (
+          <div className="transcript">
+            {meeting.transcripts.map((t) => (
+              <div className={hasSpeakers ? "t-line" : "t-flat"} key={t.id}>
+                {hasSpeakers && (
+                  <div
+                    className="who"
+                    style={{ color: t.speaker ? speakerColor(t.speaker) : "var(--muted)" }}
+                  >
+                    {t.speaker && (
+                      <span
+                        className="swatch"
+                        style={{ background: speakerColor(t.speaker) }}
+                      />
+                    )}
+                    {t.speaker ? speakerLabel(t.speaker) : "—"}
+                  </div>
+                )}
+                <div className="body">{t.text}</div>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );

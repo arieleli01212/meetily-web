@@ -2,6 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { api, API_BASE, RuntimeConfig } from "@/lib/api";
+import {
+  AlertIcon,
+  CheckIcon,
+  KeyIcon,
+  ServerIcon,
+  SparklesIcon,
+} from "@/components/Icons";
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
@@ -46,108 +53,132 @@ export default function SettingsPage() {
     try {
       await api.saveModelConfig({ provider, model, whisperModel, apiKey });
       setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
     } catch (e) {
       setError(String(e));
     }
   }
 
-  return (
-    <div>
-      <h1>Settings</h1>
+  const healthy = health === "ok";
 
-      <h2>Connections</h2>
-      <div className="card">
-        <div className="row spread">
-          <span>Backend</span>
-          <span className="muted">{API_BASE}</span>
+  return (
+    <div className="fade-in">
+      <div className="page-head">
+        <div>
+          <h1>Settings</h1>
+          <div className="subtitle">
+            Connection endpoints come from environment variables; the model
+            selection below is editable at runtime.
+          </div>
         </div>
-        <div className="row spread">
-          <span>Backend health</span>
-          <span className={`pill ${health === "ok" ? "ok" : "err"}`}>
+      </div>
+
+      {error && (
+        <div className="alert err">
+          <AlertIcon size={18} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="section-head" style={{ marginTop: 0 }}>
+        <ServerIcon size={16} />
+        <h2>Connections</h2>
+      </div>
+      <div className="card pad-lg">
+        <div className="kv">
+          <span className="k">Backend health</span>
+          <span className={`badge ${healthy ? "ok" : "err"}`}>
+            <span className="dot" />
             {health}
           </span>
         </div>
+        <div className="kv">
+          <span className="k">Backend</span>
+          <span className="v">{API_BASE}</span>
+        </div>
         {config && (
           <>
-            <div className="row spread">
-              <span>Whisper server URL</span>
-              <span className="muted">{config.whisper_server_url}</span>
+            <div className="kv">
+              <span className="k">Whisper server</span>
+              <span className="v">{config.whisper_server_url}</span>
             </div>
-            <div className="row spread">
-              <span>Transcription language</span>
-              <span className="muted">
-                {config.whisper_language || "auto-detect"}
-              </span>
+            <div className="kv">
+              <span className="k">Transcription language</span>
+              <span className="v">{config.whisper_language || "auto-detect"}</span>
             </div>
-            <div className="row spread">
-              <span>Diarization (WhisperX) URL</span>
-              <span className="muted">{config.diarize_server_url}</span>
+            <div className="kv">
+              <span className="k">Diarization (WhisperX)</span>
+              <span className="v">{config.diarize_server_url}</span>
             </div>
-            <div className="row spread">
-              <span>LLM base URL</span>
-              <span className="muted">{config.llm_base_url}</span>
+            <div className="kv">
+              <span className="k">LLM base URL</span>
+              <span className="v">{config.llm_base_url}</span>
             </div>
-            <div className="row spread">
-              <span>Chunk size / overlap</span>
-              <span className="muted">
+            <div className="kv">
+              <span className="k">Chunk size / overlap</span>
+              <span className="v">
                 {config.chunk_size} / {config.chunk_overlap}
               </span>
             </div>
           </>
         )}
-        <p className="muted" style={{ marginTop: 10 }}>
-          Connection URLs are set via environment variables (WHISPER_SERVER_URL,
-          LLM_BASE_URL, …) so the deployment can point at local, air-gapped
-          services. The model/provider selection below is editable at runtime.
-        </p>
       </div>
 
-      <h2>Summarization model</h2>
-      <form className="card" onSubmit={onSave}>
-        <label>Provider</label>
-        <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-          <option value="ollama">Ollama (local)</option>
-          <option value="openai">OpenAI-compatible</option>
-          <option value="groq">Groq</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="anthropic">Anthropic</option>
-        </select>
+      <div className="section-head">
+        <SparklesIcon size={16} />
+        <h2>Summarization model</h2>
+      </div>
+      <form className="card pad-lg" onSubmit={onSave}>
+        <div className="field">
+          <label>Provider</label>
+          <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+            <option value="ollama">Ollama (local)</option>
+            <option value="openai">OpenAI-compatible</option>
+            <option value="groq">Groq</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+        </div>
 
-        <label>Model</label>
-        <input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="llama3.2"
-        />
+        <div className="field">
+          <label>Model</label>
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="llama3.2"
+          />
+        </div>
 
-        <label>Whisper model</label>
-        <input
-          value={whisperModel}
-          onChange={(e) => setWhisperModel(e.target.value)}
-          placeholder="base.en"
-        />
+        <div className="field">
+          <label>Whisper model</label>
+          <input
+            value={whisperModel}
+            onChange={(e) => setWhisperModel(e.target.value)}
+            placeholder="base.en"
+          />
+        </div>
 
-        <label>API key (leave blank for local/no-auth)</label>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="optional"
-        />
+        <div className="field">
+          <label>API key</label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="Leave blank for local / no-auth"
+          />
+          <div className="hint">
+            <KeyIcon size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+            Stored on the backend; never exposed to the browser.
+          </div>
+        </div>
 
-        <div style={{ marginTop: 14 }}>
+        <div className="row">
           <button className="btn" type="submit">
-            Save
+            {saved ? <CheckIcon size={16} /> : null}
+            {saved ? "Saved" : "Save changes"}
           </button>
-          {saved && (
-            <span className="pill ok" style={{ marginLeft: 10 }}>
-              Saved
-            </span>
-          )}
         </div>
       </form>
-
-      {error && <div className="card pill err">{error}</div>}
     </div>
   );
 }

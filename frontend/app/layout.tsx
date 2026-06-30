@@ -1,11 +1,15 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import Link from "next/link";
+import NavBar from "@/components/NavBar";
 
 export const metadata: Metadata = {
   title: "Meetily Web",
   description: "Privacy-first, air-gapped AI meeting assistant (web edition)",
 };
+
+// Applies the saved theme before first paint to avoid a flash of the wrong
+// theme. Falls back to the OS preference. Runs inline, fully offline.
+const themeBoot = `(function(){try{var t=localStorage.getItem('meetily-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();`;
 
 export default function RootLayout({
   children,
@@ -14,21 +18,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
+      </head>
       <body>
-        <nav className="nav">
-          <Link href="/" className="brand">
-            Meetily Web
-          </Link>
-          <Link href="/" className="link">
-            Meetings
-          </Link>
-          <Link href="/record" className="link">
-            Record
-          </Link>
-          <Link href="/settings" className="link">
-            Settings
-          </Link>
-        </nav>
+        <NavBar />
         <main className="container">{children}</main>
       </body>
     </html>
